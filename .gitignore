@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.log
+.DS_Store
+
+# Runtime and student data: keep out of the public repository
+users.json
+progress.json
+audit_log.json
+config.json
+offset.json
+*.sqlite
+*.sqlite3
+*.db
