@@ -5,11 +5,8 @@ import copy
 import html
 import logging
 import os
-import json
-import base64
 import random
 import re
-import threading
 from collections import defaultdict, deque
 import requests
 import httpx
@@ -27,8 +24,6 @@ from aiogram.methods import SendMessage, EditMessageText
 import content
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
 GEMINI_API_KEYS = list(dict.fromkeys(
     key.strip()
     for value in (os.getenv("GEMINI_API_KEYS", ""), os.getenv("GEMINI_API_KEY", ""))
@@ -85,7 +80,6 @@ chat_mode, chat_sessions, admin_state, pending_buttons = {}, {}, {}, {}
 wolfram_mode = {}
 short_answers_cache = {}
 user_locks = defaultdict(asyncio.Lock)
-github_write_lock = threading.Lock()
 config_save_lock = asyncio.Lock()
 fallback_status_lock = asyncio.Lock()
 fallback_provider_state = {"provider": "gemini"}
@@ -99,13 +93,7 @@ audit_dirty = False
 
 
 def load_config():
-    try:
-        r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/config.json",
-                         headers={"Authorization": f"token {GITHUB_TOKEN}"}, timeout=5)
-        if r.status_code == 200:
-            return json.loads(base64.b64decode(r.json()["content"]).decode())
-    except Exception as e:
-        logging.error(f"load_config: {e}")
+    """Return defaults only; configuration is never loaded from GitHub or disk."""
     return {"owner_id": 5117740235, "admins": {},
             "force_subscription": {"enabled": False, "channels": [], "message": ""},
             "notifications": {"enabled": True, "on_new_user": True,
@@ -114,56 +102,20 @@ def load_config():
 
 
 def save_config(cfg):
-    try:
-        with github_write_lock:
-            r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/config.json",
-                             headers={"Authorization": f"token {GITHUB_TOKEN}"}, timeout=5)
-            sha = r.json().get("sha") if r.status_code == 200 else None
-            data = {"message": f"config {datetime.utcnow().isoformat()}",
-                    "content": base64.b64encode(
-                        json.dumps(cfg, ensure_ascii=False, indent=2).encode("utf-8")).decode()}
-            if sha:
-                data["sha"] = sha
-            response = requests.put(
-                f"https://api.github.com/repos/{GITHUB_REPO}/contents/config.json",
-                headers={"Authorization": f"token {GITHUB_TOKEN}"}, json=data, timeout=5)
-            response.raise_for_status()
-            return True
-    except Exception as e:
-        logging.error(f"save_config: {e}")
-        return False
+    """Keep administrative configuration in process memory only."""
+    CONFIG.clear()
+    CONFIG.update(cfg)
+    return True
 
 
 def load_json(filename, default):
-    try:
-        r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
-                         headers={"Authorization": f"token {GITHUB_TOKEN}"}, timeout=5)
-        if r.status_code == 200:
-            return json.loads(base64.b64decode(r.json()["content"]).decode())
-    except Exception as e:
-        logging.error(f"load {filename}: {e}")
-    return default
+    """Return a fresh in-memory default; runtime data is not read from external storage."""
+    return copy.deepcopy(default)
 
 
 def save_json(filename, data):
-    try:
-        with github_write_lock:
-            r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
-                             headers={"Authorization": f"token {GITHUB_TOKEN}"}, timeout=5)
-            sha = r.json().get("sha") if r.status_code == 200 else None
-            payload = {"message": f"update {filename} {datetime.utcnow().isoformat()}",
-                       "content": base64.b64encode(
-                           json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")).decode()}
-            if sha:
-                payload["sha"] = sha
-            response = requests.put(
-                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
-                headers={"Authorization": f"token {GITHUB_TOKEN}"}, json=payload, timeout=5)
-            response.raise_for_status()
-            return True
-    except Exception as e:
-        logging.error(f"save {filename}: {e}")
-        return False
+    """No-op persistence hook retained for compatibility; data stays in memory only."""
+    return True
 
 
 CONFIG = {
@@ -188,7 +140,7 @@ def get_offset():
 
 
 def save_offset(offset):
-    return save_json("offset.json", {"offset": offset})
+    return True
 
 
 def is_owner(uid):
@@ -256,7 +208,7 @@ def trim_chat_history(history):
 def safe_technical_error(error):
     detail = str(error).replace("\n", " ").strip()
     secrets = (*GEMINI_API_KEYS, GROQ_API_KEY, os.getenv("WOLFRAM_APPID"),
-               TELEGRAM_TOKEN, GITHUB_TOKEN)
+               TELEGRAM_TOKEN)
     for secret in secrets:
         if secret:
             detail = detail.replace(secret, "[REDACTED]")
